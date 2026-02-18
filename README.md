@@ -8,7 +8,7 @@
 ![visitors](https://visitor-badge.laobi.icu/badge?page_id=FlashStarlingEnhance&left_color=green&right_color=red)
 
 
-https://github.com/user-attachments/assets/65afb2fe-926f-4096-930b-0b4742105d73
+github: https://github.com/und666/FlashStarlingEnhance
 
 
 </div>
