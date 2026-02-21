@@ -10,6 +10,7 @@
 	import fse.core.FSE;
 	import fse.conf.*;
 import fse.core.FSE_Manager;
+import fse.utils.FSEProfiler;
 
 /**
 	 * 动画控制器

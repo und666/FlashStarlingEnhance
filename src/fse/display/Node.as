@@ -13,8 +13,8 @@ import flash.utils.getQualifiedClassName;
 import fse.conf.*;
 import fse.core.FSE;
 import fse.core.FSE_Manager;
+import fse.utils.FSEProfiler;
 import fse.utils.Hash;
-import fse.utils.MD5;
 
 /**
 	 * 场景树节点 (Shadow Node) - 简化版
@@ -24,6 +24,7 @@ import fse.utils.MD5;
 	 */
 	public class Node
 	{
+		
 		public var source:DisplayObject;
 		public var children:Vector.<Node>;
 		
@@ -33,12 +34,11 @@ import fse.utils.MD5;
 		public var pivotY:Number = 0;
 		
 		// ------ 上一帧的状态缓存 ------
+		
 		private var _lastX:Number;
 		private var _lastY:Number;
 		private var _lastScaleX:Number;
 		private var _lastScaleY:Number;
-		private var _lastWidth:Number;
-		private var _lastHeight:Number;
 		private var _lastRotation:Number;
 		private var _lastAlpha:Number;
 		private var _lastFrame:int = -1;
@@ -49,6 +49,8 @@ import fse.utils.MD5;
 		private var _lastText:String = null;
 		// [新增] 记录可见性
 		private var _lastVisible:Boolean;
+		// [新增] 用于 O(1) 极速对比子节点数量，防止休眠时漏掉子节点增删
+		public var lastNumChildren:int = -1;
 		
 		//位图哈希
 		private var hash:String;
@@ -61,11 +63,17 @@ import fse.utils.MD5;
 		
 		
 		// 定义操作类型常量
-        public static const UPDATE_PROP:String = "prop";   // 属性变化(x,y,alpha...)
+        public static const UPDATE_PROP:String = "prop";   // 属性变化(x,y,alpha...) 这一项将被分解
+		public static const UPDATE_PROP_POS:String = "position";   // 属性变化(x,y)
+		public static const UPDATE_PROP_SCALE:String = "scale";   // 属性变化(scale)
+		public static const UPDATE_PROP_ROTA:String = "rotation";   // 属性变化(rotation)
+		public static const UPDATE_PROP_ALPHA:String = "alpha";   // 属性变化(alpha)
+		public static const UPDATE_PROP_VISIBLE:String = "visible";   // 属性变化(alpha)
+		
         public static const UPDATE_TEXTURE:String = "texture"; // 纹理内容变化(重绘)
         public static const UPDATE_HIERARCHY:String = "hierarchy"; // 层级/父子关系变化
 		public static const UPDATE_FILTER:String = "filter"; //滤镜更新常量
-		private var _lastFilterSig:String = ""; // 上一次的滤镜签名
+		private var _lastFilters:Array = null; // 上一次的滤镜签名
 		
 		// [新增] 持有 Starling 层的对应显示对象
         // 使用 Object 类型以避免在 fse.display 包中引入 starling 包造成强耦合
@@ -179,14 +187,17 @@ import fse.utils.MD5;
 		 */
 		public function updateSnapshot():void
 		{
+			
 			if(!source)return;
+			
 			
 			// 先清理旧纹理
 			if (this.bitmapData) {
 				this.bitmapData.dispose();
 				this.bitmapData = null;
 			}
-		
+			
+			
 			// [新规则] 如果是容器 (MovieClip, Sprite)，直接跳过
 			// 它的"肉"存在于它的子 Shape 节点中，不由它自己负责渲染
 			if(source is DisplayObjectContainer)return;
@@ -210,6 +221,7 @@ import fse.utils.MD5;
 			if (!FSE.noGPU && !FSE.isIgnore(source) && bounds.width >= 1 && bounds.height >= 1)
 			{
 				try {
+					//热点代码---------------------------------------------------
 					var w:int = Math.ceil(bounds.width);
 					var h:int = Math.ceil(bounds.height);
 					
@@ -218,13 +230,12 @@ import fse.utils.MD5;
 					mat.translate(-bounds.x, -bounds.y);
 					
 					bmd.draw(source, mat);
-					
+					//----------------------------------------------------------
 					this.pivotX = -bounds.x;
 					this.pivotY = -bounds.y;
 					
-					var now_hash:String = MD5.getMD5(Hash.getHash(bmd));
+					var now_hash:String = Hash.getFastHash(bmd);
 					
-				
 					if(hash != now_hash){
 						hash = now_hash;
 						//真正意义上的位图更新
@@ -239,135 +250,131 @@ import fse.utils.MD5;
 			}
 			//source.visible = vis_temp;
 		}
-
+		
 		/**
 		 * 检查属性是否发生变化
 		 */
+		
+		
 		public function checkDiff():Boolean
 		{
+			if (!source) return false;
+			// 缓存引用查找
+			if (FSE_Manager.watcher.isIgnore(source)) return false;
 			
-			if(!source)return false;
-			if(FSE_Manager.watcher.isIgnore(source)){
-				return false;
-			}
 			var isChanged:Boolean = false;
-			var changes:Array = [];
-			// --- 1. 基础变换属性 ---
-			if (source.x != _lastX) { changes.push("x"); isChanged = true; }
-			if (source.y != _lastY) { changes.push("y"); isChanged = true; }
-			if (source.scaleX != _lastScaleX) { changes.push("scaleX"); isChanged = true; }
-			if (source.scaleY != _lastScaleY) { changes.push("scaleY"); isChanged = true; }
-			if (source.width != _lastWidth) { changes.push("width"); isChanged = true; }
-			if (source.height != _lastHeight) { changes.push("height"); isChanged = true; }
-			if (source.rotation != _lastRotation) { changes.push("rotation"); isChanged = true; }
-			if (source.alpha != _lastAlpha) { changes.push("alpha"); isChanged = true; }
 			
-			// --- [新增] 滤镜变化检查 ---
-			// 只有当对象是非容器(Shape/Bitmap) 或者 容器确实有滤镜时才检查
-			// 为了性能，如果 source.filters 为空且 _lastFilterSig 为空，则快速跳过
+			// --- 1. 基础变换属性 (合并判断，干掉 Array，干掉 width/height) ---
+			// 只要有任何一个变换属性改变，直接派发一次 UPDATE_PROP 即可
 			
-			var currentFilters:Array = source.filters;
-			if (currentFilters.length > 0 || _lastFilterSig != "")
-			{
-				var currentSig:String = getFilterSignature(currentFilters);
-				if (currentSig != _lastFilterSig)
-				{
-					changes.push("filters"); // 压入变更队列
+			FSEProfiler.begin("Node_dif");
+			FSEProfiler.begin("Node_dif_1");
+			if (source.x != _lastX || source.y != _lastY){
+				isChanged = true;
+				if (onUpdate != null)onUpdate(this, UPDATE_PROP_POS);
+			}
+			if (source.scaleX != _lastScaleX || source.scaleY != _lastScaleY){
+				isChanged = true;
+				if (onUpdate != null)onUpdate(this, UPDATE_PROP_SCALE);
+			}
+			if (source.rotation != _lastRotation){
+				isChanged = true;
+				if (onUpdate != null)onUpdate(this, UPDATE_PROP_ROTA);
+			}
+			if (source.alpha != _lastAlpha){
+				isChanged = true;
+				if (onUpdate != null)onUpdate(this, UPDATE_PROP_ALPHA);
+			}
+			if (getLogicalVisible() != _lastVisible){
+				isChanged = true;
+				if (onUpdate != null)onUpdate(this, UPDATE_PROP_VISIBLE);
+			}
+			FSEProfiler.end("Node_dif_1");
+			
+			FSEProfiler.begin("Node_dif_2");
+			// --- 2. 层级变化检查 ---
+			if (source.parent) {
+				if (_lastChildIndex == -1) {
+					_lastChildIndex = childIndex;
+				}
+				if (childIndex != _lastChildIndex) {
 					isChanged = true;
-					// 注意：这里先不更新 _lastFilterSig，而在 recordState 中统一更新
+					if (onUpdate != null) onUpdate(this, UPDATE_HIERARCHY);
 				}
 			}
 			
-			// [新增] 可见性同步
-			// ⚠️ 警告：如果 Controller 强制隐藏了 Flash 对象，这里会检测到 visible=false
-			// 导致 Starling 对象也隐藏。
-			if (getLogicalVisible() != _lastVisible)
-			{
-				changes.push("visible");
-				isChanged = true;
-			}
-			
-			
-			// --- [新增] 层级变化检查 ---
-			// childIndex 的数值由 Watcher 在遍历时赋值，这里只负责检测变化
-			if(source.parent)childIndex=source.parent.getChildIndex(source);
-			if(_lastChildIndex==-1){
-				_lastChildIndex=childIndex;
-			}
-			if (childIndex != _lastChildIndex)
-			{
-				changes.push("childIndex");
-				isChanged = true;
-				if(Config.TRACE_NODE)trace("[Node] 层级调整: " + getName() + " " + _lastChildIndex + " -> " + childIndex);
-			}
-			
-			
-			// --- 2. 容器帧变化处理 ---
-			//更新 这里我们不扫描帧变化
-			
-			if (source is MovieClip)
-			{
+			// --- 3. 容器帧变化处理 ---
+			if (source is MovieClip) {
 				var mc:MovieClip = source as MovieClip;
-				if (mc.currentFrame != _lastFrame)
-				{
-					//我认为帧变化时不需要isChanged同步的，因为帧变化了只需要同步Shape的内容
-					//changes.push("frame:" + mc.currentFrame);
-					//isChanged = true;
-					// [核心逻辑] 帧变了 -> Flash 会销毁旧 Shape 创建新 Shape
-					// 我们必须主动移除当前 Node 下的所有 Shape 子节点
-					// Watcher 下一轮扫描时会发现新的 Shape 并为它们创建新 Node (执行 updateSnapshot)
-					
-					//removeShapeChildren();
+				if (mc.currentFrame != _lastFrame) {
 					updateFrame();
-					// 注意：这里不再调用 updateSnapshot()，因为 MC 自己不产生纹理
 				}
 			}
 			
-		
-			// --- 3. [新增] 文本内容变化处理 (针对 TextField) ---
-			// 只有当对象确实是 TextField 时才检查
-			if (source is TextField)
-			{
+			
+			// --- 4. 文本内容变化处理 ---
+			if (source is TextField) {
 				var tf:TextField = source as TextField;
-				// 比较当前文本和记录的文本
-				if (tf.text != _lastText)
-				{
-					changes.push("text");
+				if (tf.text != _lastText) {
 					isChanged = true;
-					
-					// 文本变了，必须重新截图！
-					// 因为 TextField 实例没变，Watcher 不会把它当新对象，
-					// 所以我们必须手动触发 updateSnapshot
-					if(Config.TRACE_NODE)trace("[Node] 文本变化重绘: " + tf.text);
 					updateSnapshot();
 				}
 			}
 			
-			if (isChanged)
-			{
-				_coldTimeMax=0;
-				while(changes.length){
-					onUpdateMovieClip(this,changes.pop());
-				}
-				
+			// --- 5. 滤镜变化检查 (由于读取 filters 会产生 GC，放到最后执行) ---
+			// --- 5. 滤镜变化比对 ---
+			var currentFilters:Array = source.filters;
+			if (checkFiltersChanged(currentFilters)) {
+				isChanged = true;
+				if (onUpdate != null) onUpdate(this, UPDATE_FILTER);
+			}
+			
+			// --- 6. 统一记录状态 ---
+			if (isChanged) {
+				_coldTimeMax = -2;
+				// 原来的 recordState 会把当前属性直接赋值给 _lastX 等，非常高效
 				recordState();
 			}
-
+			FSEProfiler.end("Node_dif_2");
+			FSEProfiler.end("Node_dif");
 			return isChanged;
 		}
 		
-		private function onUpdateMovieClip(node:Node,type:String){
-			//if(Config.TRACE_NODE)trace("[Node] 属性修改:"+node.getName(),'    '+type);
-			if(type=="rotation" || type=="x" || type=="y" || type=="scaleX" || type=="scaleY" || type=="alpha" || type=="visible"){
-				if(onUpdate != null)onUpdate(this, UPDATE_PROP);
+		/**
+		 * [优化版] 检查滤镜是否发生变化 (零字符串拼接，零 GC)
+		 */
+		private function checkFiltersChanged(currentFilters:Array):Boolean
+		{
+			var noCurrent:Boolean = (!currentFilters || currentFilters.length == 0);
+			var noLast:Boolean = (!this._lastFilters || this._lastFilters.length == 0);
+			
+			// 1. 数量或有无发生变化
+			if (noCurrent && noLast) return false;
+			if (noCurrent != noLast) return true;
+			if (currentFilters.length != this._lastFilters.length) return true;
+			
+			// 2. 逐个比对具体属性
+			var len:int = currentFilters.length;
+			for (var i:int = 0; i < len; i++) {
+				var f1:* = currentFilters[i];
+				var f2:* = this._lastFilters[i];
+				
+				// 构造函数不同，说明换了滤镜类型 (比 getQualifiedClassName 快得多)
+				if (f1.constructor !== f2.constructor) return true;
+				
+				if (f1 is GlowFilter) {
+					if (f1.color != f2.color || f1.alpha != f2.alpha || f1.blurX != f2.blurX || f1.blurY != f2.blurY || f1.strength != f2.strength || f1.quality != f2.quality || f1.inner != f2.inner || f1.knockout != f2.knockout) return true;
+				} else if (f1 is BlurFilter) {
+					if (f1.blurX != f2.blurX || f1.blurY != f2.blurY || f1.quality != f2.quality) return true;
+				} else if (f1 is DropShadowFilter) {
+					if (f1.distance != f2.distance || f1.angle != f2.angle || f1.color != f2.color || f1.alpha != f2.alpha || f1.blurX != f2.blurX || f1.blurY != f2.blurY || f1.strength != f2.strength || f1.inner != f2.inner || f1.knockout != f2.knockout) return true;
+				} else {
+					// 对于不支持的特殊滤镜，为了安全起见默认视为已改变
+					return true;
+				}
 			}
-			if(type=="childIndex"){
-				if(onUpdate != null)onUpdate(this, UPDATE_HIERARCHY);
-			}
-			// [新增] 响应滤镜变化
-			if (type == "filters") {
-				if (onUpdate != null) onUpdate(this, UPDATE_FILTER);
-			}
+			
+			return false;
 		}
 		
 		//###############
@@ -418,36 +425,23 @@ import fse.utils.MD5;
 			if(source){
 				_lastX = source.x;
 				_lastY = source.y;
-				
-				//if(source is DisplayObjectContainer){
-					_lastScaleX = source.scaleX;
-					_lastScaleY = source.scaleY;
-				//}else{
-					_lastWidth = source.width;
-					_lastHeight = source.height;
-				//}
+				_lastScaleX = source.scaleX;
+				_lastScaleY = source.scaleY;
 				_lastRotation = source.rotation;
 				_lastAlpha = source.alpha;
-				// [新增] 记录滤镜签名
-				_lastFilterSig = getFilterSignature(source.filters);
+				_lastFilters = source.filters;
 			}
+			
 			_lastVisible = getLogicalVisible();
-			// [新增] 记录层级
 			_lastChildIndex = childIndex;
 			
-			/*
-			if (source is MovieClip)
-			{
-				_lastFrame = (source as MovieClip).currentFrame;
-			}
-			*/
-		
-			// [新增] 记录文本状态
+			
 			if (source is TextField)
 			{
 				_lastText = (source as TextField).text;
 			}
-		
+			
+			
 			//if(Config.TRACE_NODE)trace("[Node] -> 对象: " + source.name, ' 属性刷新 ');
 		}
 		

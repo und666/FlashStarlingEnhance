@@ -205,7 +205,7 @@
                 bmd.draw(target, matrix, null, null, null, true);
                 
                 // 获取哈希值
-                return getHash(bmd);
+                return getFastHash(bmd);
             }
             catch (error:Error)
             {

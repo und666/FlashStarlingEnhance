@@ -65,11 +65,13 @@
 		
 		
 		// -------------------------------------------------
-		// 缓存策略相关(Cache)
+		// 性能相关(Performance)
 		// -------------------------------------------------
 		public static const CACHE_THRESHOLD:uint = 3; //持久化阈值：如果场景同时出现超过这个数的同样纹理，那么这个纹理将被持久化存入缓存
 		public static const WATCHER_COLD_TIME:uint = 15;
 		
+		//public static var MAX_UPDATE_PER_FRAME:int = 300; // 每帧渲染最大处理配额 (建议值: 300-800，根据你的目标机型性能微调)
+		//public static var FORCE_FLUSH_THRESHOLD:int = 3000; //强制清空阈值 (当积压超过此值，无视配额强制一波流，防止内存爆掉或严重不同步)
 		
 		// -------------------------------------------------
 		// 调试相关(Debug)

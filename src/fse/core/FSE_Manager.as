@@ -160,7 +160,7 @@ import starling.display.Sprite;
 		{
 			if (! _logicListeners[scope])
 			{
-				_logicListeners[scope] = new Vector.<Function >   ;
+				_logicListeners[scope] = new Vector.<Function >;
 			}
 
 			// 简单的查重，防止重复添加

@@ -9,6 +9,7 @@
 	
 	import fse.core.FSE;
 	import fse.conf.*;
+import fse.utils.FSEProfiler;
 
 /**
 	 * 场景监控器
@@ -176,7 +177,9 @@
 		
 		public function scan(targetRoot:DisplayObjectContainer):void
 		{
+			FSEProfiler.begin("Scanner_scan");
 			_scanner.scan(targetRoot);
+			FSEProfiler.end("Scanner_scan");
 		}
 		
 		public function isIgnore(mc:DisplayObject):Boolean{
@@ -194,6 +197,7 @@
 		// [修改] 改为 internal 供 Scanner 调用
 		internal function createNode(target:DisplayObject , parentNode:Node):Node
 		{
+			FSEProfiler.begin("Node_create");
 			var enableCache1:Boolean = StatusSaver.getCacheConfig(target);
 			var enableCache2:Boolean = false
 			if(target.parent){
@@ -207,6 +211,7 @@
 			var node:Node = new Node(target, parentNode , deleteNodeFromMap, enableCache);
 			_nodeMap[target] = node;
 			return node;
+			FSEProfiler.end("Node_create");
 		}
 		
 		// [修改] 改为 internal 供 Scanner 调用

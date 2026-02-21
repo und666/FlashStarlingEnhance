@@ -210,7 +210,7 @@
 			
 			_viewZIndexMap[view] = node.childIndex;
 			
-			syncTransform(node, view);
+			syncTransform(node, view ,"all");
 			
 			if (node.source && node.source.filters && node.source.filters.length > 0) {
 				syncFilters(node, view);
@@ -306,9 +306,9 @@
             if (!view) return;
 
             // 根据你的 Node.as 定义的字符串常量进行判断
-            if (type == Node.UPDATE_PROP)
+            if (type == Node.UPDATE_PROP_POS || type == Node.UPDATE_PROP_SCALE || type == Node.UPDATE_PROP_ALPHA || type == Node.UPDATE_PROP_ROTA || type == Node.UPDATE_PROP_VISIBLE)
             {
-                syncTransform(node, view);
+                syncTransform(node, view ,type);
             }
             else if (type == Node.UPDATE_TEXTURE)
             {
@@ -445,28 +445,37 @@
         /**
          * 同步基础变换属性 (x, y, scale, rotation, alpha, visible)
          */
-		private function syncTransform(node:Node, view:DisplayObject):void
-		{
-			if(!node.source) return;
-			view.x = node.source.x;
-			view.y = node.source.y;
-			view.rotation = deg2rad(node.source.rotation);
-			view.alpha = node.source.alpha;
+		private function syncTransform(node:Node, view:DisplayObject , type:String = 'all'):void {
+			if (!node.source) return;
 			
-			if(node.source is flash.display.DisplayObjectContainer){
-				view.scaleX = node.source.scaleX;
-				view.scaleY = node.source.scaleY;
-			}else{
-				// 🚀 防御 #1009: 如果是 Image 且纹理丢失，禁止修改 width/height，改用 scale
-				if (view is Image && (view as Image).texture == null) {
+			if (type == Node.UPDATE_PROP_POS || type=='all') {
+				view.x = node.source.x;
+				view.y = node.source.y;
+			}
+			if (type == Node.UPDATE_PROP_SCALE || type=='all') {
+				if (node.source is flash.display.DisplayObjectContainer) {
 					view.scaleX = node.source.scaleX;
 					view.scaleY = node.source.scaleY;
 				} else {
-					view.width = node.source.width;
-					view.height = node.source.height;
+					// 🚀 防御 #1009: 如果是 Image 且纹理丢失，禁止修改 width/height，改用 scale
+					if (view is Image && (view as Image).texture == null) {
+						view.scaleX = node.source.scaleX;
+						view.scaleY = node.source.scaleY;
+					} else {
+						view.width = node.source.width;
+						view.height = node.source.height;
+					}
 				}
 			}
-			view.visible = node.getLogicalVisible();
+			if (type == Node.UPDATE_PROP_ROTA || type=='all') {
+				view.rotation = deg2rad(node.source.rotation);
+			}
+			if (type == Node.UPDATE_PROP_ALPHA || type=='all') {
+				view.alpha = node.source.alpha;
+			}
+			if (type == Node.UPDATE_PROP_VISIBLE || type=='all') {
+				view.visible = node.getLogicalVisible();
+			}
 			if(FSE_Manager.keyRole == node.source.name){
 				// 防御内核未初始化
 				if (kernel) kernel.starlingHelpDraw();

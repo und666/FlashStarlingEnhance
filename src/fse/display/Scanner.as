@@ -9,6 +9,7 @@ import flash.text.TextField;
 import fse.core.FSE;
 import fse.conf.*;
 import fse.core.FSE_Manager;
+import fse.utils.FSEProfiler;
 
 /**
  * 场景扫描器 (从 Watcher 解耦)
@@ -36,6 +37,7 @@ public class Scanner
 			_watcher.rootNode = _watcher.createNode(targetRoot, null);
 		}
 		scanContainer(targetRoot, _watcher.rootNode);
+		
 	}
 	
 	public function scanContainer(container:DisplayObjectContainer, parentNode:Node,cold:Boolean = true):void
@@ -47,9 +49,20 @@ public class Scanner
 		parentNode._coldTime++;
 		if(container.name == FSE.keyRole || !cold) parentNode._coldTimeMax = 0;
 		
+		// 如果发现 Flash 原生容器的子对象数量，跟上一帧记录的不一样
+		// 说明有对象被 addChild 或 removeChild 了，立刻唤醒该容器进行同步！
+		if (parentNode.lastNumChildren != container.numChildren)
+		{
+			parentNode._coldTimeMax = 0; // 强制打断休眠
+			parentNode._coldTime = 1;    // 确保接下来立即执行深度扫描
+			parentNode.lastNumChildren = container.numChildren; // 记录最新数量
+		}
+		
 		// 1. 检查当前容器自身的属性 (x, y, frame...)
 		if(parentNode._coldTime > parentNode._coldTimeMax){
+			//FSEProfiler.begin("Node_checkDiff");
 			parentNode.checkDiff();
+			//FSEProfiler.end("Node_checkDiff");
 		}
 		
 		// 2. 遍历子对象 (可能是 子MC，也可能是 Shape)
@@ -85,7 +98,6 @@ public class Scanner
 						}
 					}
 					
-					
 					// ban相关,继承父类的ban配置
 					if(child is DisplayObjectContainer){
 						// ...
@@ -111,7 +123,9 @@ public class Scanner
 					}
 				}
 			}
-			
+			if (childNode) {
+				childNode.childIndex = i;
+			}
 			// [Recursion] 递归
 			if (child is DisplayObjectContainer)
 			{
@@ -120,9 +134,9 @@ public class Scanner
 			else
 			{
 				// 叶子节点 (肉)
-				if(childNode && childNode.source && childNode.source is TextField){
+				if(childNode && childNode.source){
 					childNode._coldTime++;
-					if(childNode._coldTime > childNode._coldTimeMax){
+					if(childNode._coldTime > childNode._coldTimeMax * 2){
 						childNode.checkDiff();
 						if(childNode._coldTimeMax < Config.WATCHER_COLD_TIME){
 							childNode._coldTimeMax++;

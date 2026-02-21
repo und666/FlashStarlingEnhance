@@ -1,15 +1,19 @@
 ﻿package fse.core
 {
-	import flash.display.Stage;
+import flash.desktop.NativeApplication;
+import flash.display.Stage;
 	import flash.display.DisplayObjectContainer;
 	import flash.display.MovieClip;
 	import flash.events.Event;
-	import flash.utils.getTimer;
+import flash.html.script.Package;
+import flash.utils.getTimer;
 	import flash.display.StageDisplayState;
 	
 	import fse.conf.Config;
 	import fse.starling.StarlingMain;
-	import starling.display.Sprite;
+import fse.utils.FSEProfiler;
+
+import starling.display.Sprite;
 
 	/**
 	 * FSE 核心引擎 (内部单例)
@@ -98,10 +102,13 @@
 			_lastTime = getTimer();
 			_isRunning = true;
 			stage.addEventListener(Event.ENTER_FRAME, onDriverUpdate);
-
+			NativeApplication.nativeApplication.addEventListener(Event.EXITING, onExitingHandler);
 			if (Config.TRACE_CORE) trace("[FSE] 核心逻辑已启动，等待渲染层就绪...");
 		}
-
+		private function onExitingHandler(event:Event){
+			//FSEProfiler.dump();
+		}
+		
 		/**
 		 * 接收 Starling 准备就绪的回调
 		 * (原来 FSE.onStarlingReady 的逻辑)
